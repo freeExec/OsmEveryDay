@@ -49,31 +49,111 @@ namespace OsmEveryDay
                     return 1;
                 else return this.User.CompareTo(compareRow.User);
             }
+
+            public static string ToCsvHeader()
+            {
+                return "uid;user;timestamp;changesets_count";
+            }
+
+            public void WriteCsvRow(StreamWriter writer)
+            {
+                writer.Write(Uid);
+                writer.Write(';');
+                if (User.Contains(';'))
+                {
+                    writer.Write('"');
+                    writer.Write(User);
+                    writer.Write('"');
+                }
+                else writer.Write(User);
+                writer.Write(';');
+                writer.Write(Timestamp);
+                writer.Write(';');
+                writer.Write(ChangesetsCount);
+                writer.WriteLine();
+            }
         }
 
+        public class RowAnalizeModel : IEquatable<RowAnalizeModel>
+        {
+            public int Uid;
+            public string User;
+            public int ChangesetsCount;
+            public int ChainDays;
+
+            public override bool Equals(object obj)
+            {
+                if (obj == null) return false;
+                RowAnalizeModel objAsRow = obj as RowAnalizeModel;
+                if (objAsRow == null) return false;
+                else return Equals(objAsRow);
+            }
+
+            public bool Equals(RowAnalizeModel other)
+            {
+                if (other == null) return false;
+                return (this.Uid.Equals(other.Uid));
+            }
+
+            public override int GetHashCode()
+            {
+                return Uid;
+            }
+
+            public static string ToCsvHeader()
+            {
+                return "uid;user;changesets_count;chain_days";
+            }
+
+            public void WriteCsvRow(StreamWriter writer)
+            {
+                writer.Write(Uid);
+                writer.Write(';');
+                if (User.Contains(';'))
+                {
+                    writer.Write('"');
+                    writer.Write(User);
+                    writer.Write('"');
+                }
+                else writer.Write(User);
+                writer.Write(';');
+                writer.Write(ChangesetsCount);
+                writer.Write(';');
+                writer.Write(ChainDays);
+                writer.WriteLine();
+            }
+        }
 
         static void Main(string[] args)
         {
-            if (args.Length < 1)
+            if (args.Length < 1 || args.Length > 3)
             {
                 Console.WriteLine("USAGE: osmeveryday.exe change_day.osc\n\n");
+                Console.WriteLine("       osmeveryday.exe /analize path-to-dir-on-csv\n\n");
                 return;
             }
-            var change_day = args[0];
-            if (!File.Exists(change_day))
+            if (args[0] == "/analize")
             {
-                Console.WriteLine("File {0} not found.", Path.GetFullPath(change_day));
+                var changeDaysDir = args[1];
+                Analize(changeDaysDir);
+                return;
+            }
+
+            var changeDay = args[0];
+            if (!File.Exists(changeDay))
+            {
+                Console.WriteLine("File {0} not found.", Path.GetFullPath(changeDay));
                 return;
             }
 
             var rowsImport = default(List<RowImportModel>);
-            switch(Path.GetExtension(change_day))
+            switch(Path.GetExtension(changeDay))
             {
                 case ".osc":
-                    rowsImport = ReadChangeDayOsc(change_day);
+                    rowsImport = ReadChangeDayOsc(changeDay);
                     break;
                 case ".gz":
-                    rowsImport = ReadChangeDayOscGz(change_day);
+                    rowsImport = ReadChangeDayOscGz(changeDay);
                     break;
                 default:
                     Console.WriteLine("Not supported format detected by extention of file");
@@ -81,7 +161,7 @@ namespace OsmEveryDay
             }
             
             var rowsExport = PrepareToExport(rowsImport);
-            var csv = Path.ChangeExtension(Path.GetFullPath(change_day), "csv");
+            var csv = Path.ChangeExtension(Path.GetFullPath(changeDay), "csv");
             ExportToCsv(csv, rowsExport);
 
             Console.WriteLine("All changesets: {0}, Export: {1}", rowsImport.Count, rowsExport.Count);
@@ -235,31 +315,128 @@ namespace OsmEveryDay
         {
             try
             {
-                var writeCsv = new StreamWriter(csv, false, Encoding.UTF8);
-                writeCsv.WriteLine("uid;user;timestamp;changesets_count");
+                var writeCsv = new StreamWriter(csv, false, Encoding.UTF8);                
+                writeCsv.WriteLine(RowExportModel.ToCsvHeader());
                 foreach (var rowE in rowExport)
                 {
-                    writeCsv.Write(rowE.Uid);
-                    writeCsv.Write(';');
-                    if (rowE.User.Contains(';'))
-                    {
-                        writeCsv.Write('"');
-                        writeCsv.Write(rowE.User);
-                        writeCsv.Write('"');
-                    }
-                    else writeCsv.Write(rowE.User);
-                    writeCsv.Write(';');
-                    writeCsv.Write(rowE.Timestamp);
-                    writeCsv.Write(';');
-                    writeCsv.Write(rowE.ChangesetsCount);
-                    writeCsv.WriteLine();
+                    rowE.WriteCsvRow(writeCsv);
                 }
                 writeCsv.Flush();
                 writeCsv.Close();
             }
             catch (IOException ioex)
             {
-                Console.WriteLine("IO WRITE ERROR: {0}", ioex.Message);
+                Console.WriteLine("IO WRITE EXPORT ERROR: {0}", ioex.Message);
+            }
+        }
+
+        static void Analize(string pathToDir)
+        {
+            var filesCsv = Directory.GetFiles(pathToDir, "*.csv");
+            filesCsv = filesCsv.Where(f => !f.Contains("-")).ToArray(); // исключить файлы анализа
+            Array.Sort(filesCsv);
+
+            var setPrev = new HashSet<RowAnalizeModel>();
+            var setCur = default(HashSet<RowAnalizeModel>);
+
+            int chainDays = 1;
+            foreach (var fileCsv in filesCsv)
+            {
+                setPrev = setCur;
+                setCur = new HashSet<RowAnalizeModel>();
+
+                var readerCsv = new StreamReader(Path.Combine(pathToDir, fileCsv), Encoding.UTF8);
+                var header = readerCsv.ReadLine();
+                var columnsHeader = header.Split(';');
+                int cUid = Array.FindIndex(columnsHeader, str => str == "uid");
+                int cUser = Array.FindIndex(columnsHeader, str => str == "user");
+                int cChangesetCount = Array.FindIndex(columnsHeader, str => str == "changesets_count");
+
+                var helperQuoteColumn = new StringBuilder(128);
+
+                while (!readerCsv.EndOfStream)
+                {
+                    var line = readerCsv.ReadLine();
+                    var columns = line.Split(';');
+                    var row = new RowAnalizeModel();
+                    if (columns.Length == columnsHeader.Length)
+                    {
+                        row.Uid = int.Parse(columns[cUid]);
+                        row.User = columns[cUser];
+                        row.ChangesetsCount = int.Parse(columns[cChangesetCount]);
+                    }
+                    else
+                    {
+                        // Quote
+                        var columnQ = line.Split('"');
+                        var curColumn = 0;
+                        helperQuoteColumn.Length = 0;
+                        bool openQoute = false;
+                        for (int i = 0; i < line.Length; i++)
+                        {
+                            char c = line[i];
+                            if (c == ';' && !openQoute || i == line.Length - 1)
+                            {
+                                if (i == line.Length - 1) helperQuoteColumn.Append(c);
+
+                                if (curColumn == cUid) row.Uid = int.Parse(helperQuoteColumn.ToString());
+                                else if (curColumn == cUser) row.User = helperQuoteColumn.ToString();
+                                else if (curColumn == cChangesetCount) row.ChangesetsCount = int.Parse(helperQuoteColumn.ToString());
+
+                                helperQuoteColumn.Length = 0;
+                                curColumn++;
+                            }
+                            else if (c == '"')
+                            {
+                                openQoute = !openQoute;
+                            }
+                            else helperQuoteColumn.Append(c);
+                        }
+
+                    }
+                    setCur.Add(row);
+                }
+                readerCsv.Close();
+
+                if (setPrev != null)
+                {
+                    setCur.IntersectWith(setPrev);
+                    var tmpDict = setPrev.ToDictionary(el => el.Uid);
+
+                    foreach (var row in setCur)
+                    {
+                        row.ChainDays = chainDays;
+                        row.ChangesetsCount += tmpDict[row.Uid].ChangesetsCount;
+                    }
+                    tmpDict.Clear();
+
+                    var prev = Path.GetFileNameWithoutExtension(filesCsv[0]);
+                    var cur = Path.GetFileNameWithoutExtension(fileCsv);
+                    var fileResult = string.Format("{0}-{1}.csv", prev, cur);
+                    ExportAnalizeToCsv(Path.Combine(pathToDir, fileResult), setCur);
+                    Console.WriteLine("Exporting... -> {0} Records: {1}", fileResult, setCur.Count);
+
+                    chainDays++;
+                }
+            }
+        }
+
+        static void ExportAnalizeToCsv(string csv, HashSet<RowAnalizeModel> rowExport)
+        {
+            try
+            {
+                var writeCsv = new StreamWriter(csv, false, Encoding.UTF8);
+                writeCsv.WriteLine(RowAnalizeModel.ToCsvHeader());
+                foreach (var rowE in rowExport)
+                {
+                    rowE.WriteCsvRow(writeCsv);
+                }
+                writeCsv.Flush();
+                writeCsv.Close();
+            }
+            catch (IOException ioex)
+            {
+                Console.WriteLine("IO WRITE ANALIZE ERROR: {0}", ioex.Message);
             }
         }
     }
