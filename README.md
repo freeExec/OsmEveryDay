@@ -7,16 +7,19 @@ OpenStreetMap Каждый день
 
 * Скачать с [Planet](http://planet.osm.org/replication/day) нужную последовательность дней.
 * Обработать каждый день
-  $ OsmEveryDay.exe 573.osc.gz
+
+  `OsmEveryDay.exe 573.osc.gz`
   или
-  $ OsmEveryDay.exe 573.osc
+  `OsmEveryDay.exe 573.osc`
 * Проанализировать полученные промежуточные итоги
-  $ OsmEveryDay.exe /analize .
+
+  `OsmEveryDay.exe /analize .`
   или
-  $ OsmEveryDay.exe /analize <каталог-где-лежат-файлы-полученные-на-предыдущем-шаге>
+  `OsmEveryDay.exe /analize <каталог-где-лежат-файлы-полученные-на-предыдущем-шаге>`
 
 ## Результат
 > 573.osc-578.osc.csv
+
 | uid | user | changesets_count | chain_days |
-| --- | --- | --- | --- |
+| --- | --- | :---: | :---: |
 | 499800 | freeExec | 27 | 5 |
