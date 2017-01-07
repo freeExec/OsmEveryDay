@@ -413,9 +413,11 @@ namespace OsmEveryDay
                     var prev = Path.GetFileNameWithoutExtension(filesCsv[0]);
                     var cur = Path.GetFileNameWithoutExtension(fileCsv);
                     var fileResult = string.Format("{0}-{1}.csv", prev, cur);
-                    ExportAnalizeToCsv(Path.Combine(pathToDir, fileResult), setCur);
-                    Console.WriteLine("Exporting... -> {0} Records: {1}", fileResult, setCur.Count);
-
+                    if (!File.Exists(fileResult))
+                    {
+                        ExportAnalizeToCsv(Path.Combine(pathToDir, fileResult), setCur);
+                        Console.WriteLine("Exporting... -> {0} Records: {1}", fileResult, setCur.Count);
+                    }
                     chainDays++;
                 }
             }
