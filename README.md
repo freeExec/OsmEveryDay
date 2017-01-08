@@ -9,12 +9,17 @@ OpenStreetMap Каждый день
 * Обработать каждый день
 
   `OsmEveryDay.exe 573.osc.gz`
+
   или
+
   `OsmEveryDay.exe 573.osc`
+
 * Проанализировать полученные промежуточные итоги
 
   `OsmEveryDay.exe /analize .`
+
   или
+
   `OsmEveryDay.exe /analize <каталог-где-лежат-файлы-полученные-на-предыдущем-шаге>`
 
 ## Результат
@@ -23,3 +28,13 @@ OpenStreetMap Каждый день
 | uid | user | changesets_count | chain_days |
 | --- | --- | :---: | :---: |
 | 499800 | freeExec | 27 | 5 |
+
+## Использование 2
+
+* Скачать с [Planet-changesets-latest](http://planet.osm.org/planet/changesets-latest.osm.bz2).
+* Анализ
+  `OsmEveryDay.exe /analize changesets-latest.osm.bz2 2016` - период за год
+
+  `OsmEveryDay.exe /analize changesets-latest.osm.bz2 2016-04` - период за месяц
+
+  `OsmEveryDay.exe /analize changesets-latest.osm.bz2 2016-04-12` - период за день

@@ -1,9 +1,13 @@
-﻿using System;
+﻿using ICSharpCode.SharpZipLib.BZip2;
+using System;
+using System.Collections;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
 using System.Text;
+using System.Threading;
 
 namespace OsmEveryDay
 {
@@ -11,7 +15,13 @@ namespace OsmEveryDay
     {
         const int DEFAULT_ROWS = 1000;
 
-        public class RowImportModel : IComparable<RowImportModel>
+        public interface IExportToCsv
+        {
+            string ToCsvHeader();
+            void WriteCsvRow(StreamWriter writer);
+        }
+
+        public class RowImportStore : IComparable<RowImportStore>
         {
             public int Uid;
             public string User;
@@ -19,7 +29,7 @@ namespace OsmEveryDay
             public long Changeset;
 
             // Default comparer for type.
-            public int CompareTo(RowImportModel compareRow)
+            public int CompareTo(RowImportStore compareRow)
             {
                 // A null value means that this object is greater.
                 if (compareRow == null)
@@ -34,7 +44,7 @@ namespace OsmEveryDay
             }
         }
 
-        public class RowExportModel : IComparable<RowExportModel>
+        public class RowExportStore : IExportToCsv, IComparable<RowExportStore>
         {
             public int Uid;
             public string User;
@@ -42,7 +52,7 @@ namespace OsmEveryDay
             public int ChangesetsCount;
 
             // Default comparer for type.
-            public int CompareTo(RowExportModel compareRow)
+            public int CompareTo(RowExportStore compareRow)
             {
                 // A null value means that this object is greater.
                 if (compareRow == null)
@@ -50,7 +60,7 @@ namespace OsmEveryDay
                 else return this.User.CompareTo(compareRow.User);
             }
 
-            public static string ToCsvHeader()
+            public string ToCsvHeader()
             {
                 return "uid;user;timestamp;changesets_count";
             }
@@ -74,7 +84,7 @@ namespace OsmEveryDay
             }
         }
 
-        public class RowAnalizeModel : IEquatable<RowAnalizeModel>
+        public class RowAnalizeStore : IExportToCsv, IEquatable<RowAnalizeStore>
         {
             public int Uid;
             public string User;
@@ -84,12 +94,12 @@ namespace OsmEveryDay
             public override bool Equals(object obj)
             {
                 if (obj == null) return false;
-                RowAnalizeModel objAsRow = obj as RowAnalizeModel;
+                RowAnalizeStore objAsRow = obj as RowAnalizeStore;
                 if (objAsRow == null) return false;
                 else return Equals(objAsRow);
             }
 
-            public bool Equals(RowAnalizeModel other)
+            public bool Equals(RowAnalizeStore other)
             {
                 if (other == null) return false;
                 return (this.Uid.Equals(other.Uid));
@@ -100,7 +110,7 @@ namespace OsmEveryDay
                 return Uid;
             }
 
-            public static string ToCsvHeader()
+            public string ToCsvHeader()
             {
                 return "uid;user;changesets_count;chain_days";
             }
@@ -122,20 +132,53 @@ namespace OsmEveryDay
                 writer.Write(ChainDays);
                 writer.WriteLine();
             }
+
+            public override string ToString()
+            {
+                return string.Format("{0}[{1}]:{2}/{3}", User, Uid, ChangesetsCount, ChainDays);
+            }
+        }
+
+        static void ShowHelp()
+        {
+            Console.WriteLine("USAGE: osmeveryday.exe change_day.osc\n\n");
+            Console.WriteLine("       osmeveryday.exe /analize path-to-dir-on-csv\n\n");
+            Console.WriteLine("       osmeveryday.exe /analize changesets-latest.osm.bz2 <year>\n");
+            Console.WriteLine("       osmeveryday.exe /analize changesets-latest.osm.bz2 <year>-<month>\n");
+            Console.WriteLine("       osmeveryday.exe /analize changesets-latest.osm.bz2 <year>-<month>-<day>\n\n");
         }
 
         static void Main(string[] args)
         {
             if (args.Length < 1 || args.Length > 3)
             {
-                Console.WriteLine("USAGE: osmeveryday.exe change_day.osc\n\n");
-                Console.WriteLine("       osmeveryday.exe /analize path-to-dir-on-csv\n\n");
+                ShowHelp();
                 return;
             }
+
+            var gbDateInfo = new DateTimeFormatInfo();
+            gbDateInfo.ShortDatePattern = "yyyy-MM-dd";
+            var culture = (CultureInfo)CultureInfo.CurrentCulture.Clone();
+            culture.DateTimeFormat = gbDateInfo;
+            Thread.CurrentThread.CurrentCulture = culture;
+
             if (args[0] == "/analize")
             {
                 var changeDaysDir = args[1];
-                Analize(changeDaysDir);
+                var changesetsFile = Path.GetFileName(changeDaysDir);
+                if (changesetsFile.StartsWith("changesets") && changesetsFile.EndsWith("osm.bz2"))
+                {
+                    if (args.Length != 3)
+                    {
+                        ShowHelp();
+                        return;
+                    }
+                    AnalizeYearByChangesetAll(changeDaysDir, args[2]);
+                }
+                else
+                {
+                    Analize(changeDaysDir);
+                }
                 return;
             }
 
@@ -146,7 +189,7 @@ namespace OsmEveryDay
                 return;
             }
 
-            var rowsImport = default(List<RowImportModel>);
+            var rowsImport = default(List<RowImportStore>);
             switch(Path.GetExtension(changeDay))
             {
                 case ".osc":
@@ -167,9 +210,9 @@ namespace OsmEveryDay
             Console.WriteLine("All changesets: {0}, Export: {1}", rowsImport.Count, rowsExport.Count);
         }
 
-        static List<RowImportModel> ReadChangeDayOscGz(string changeDayGz)
+        static List<RowImportStore> ReadChangeDayOscGz(string changeDayGz)
         {
-            var rowsImport = new List<RowImportModel>(DEFAULT_ROWS);
+            var rowsImport = new List<RowImportStore>(DEFAULT_ROWS);
             try
             {
                 var readerOscGzRaw = new FileStream(changeDayGz, FileMode.Open);
@@ -195,9 +238,9 @@ namespace OsmEveryDay
             return rowsImport;
         }
 
-        static List<RowImportModel> ReadChangeDayOsc(string changeDay)
+        static List<RowImportStore> ReadChangeDayOsc(string changeDay)
         {
-            var rowsImport = default(List<RowImportModel>);
+            var rowsImport = default(List<RowImportStore>);
             try
             {
                 var readerOsc = new StreamReader(changeDay, Encoding.UTF8);
@@ -211,9 +254,9 @@ namespace OsmEveryDay
             return rowsImport;
         }
 
-        static List<RowImportModel> ParseOsc(StreamReader readerOsc, long fileSize)
+        static List<RowImportStore> ParseOsc(StreamReader readerOsc, long fileSize)
         {
-            var rowsImport = new List<RowImportModel>(DEFAULT_ROWS);
+            var rowsImport = new List<RowImportStore>(DEFAULT_ROWS);
             var existsChangeset = new HashSet<long>();
 
             int count = 0;
@@ -253,7 +296,7 @@ namespace OsmEveryDay
                         if (!existsChangeset.Contains(changeset))
                         {
                             existsChangeset.Add(changeset);
-                            rowsImport.Add(new RowImportModel
+                            rowsImport.Add(new RowImportStore
                             {
                                 Timestamp = splits[5],
                                 Uid = int.Parse(splits[7]),
@@ -278,14 +321,15 @@ namespace OsmEveryDay
             return rowsImport;
         }
 
-        static List<RowExportModel> PrepareToExport(List<RowImportModel> rowImport)
+        //static List<RowExportStore> PrepareToExport(List<RowImportStore> rowImport)
+        static List<RowExportStore> PrepareToExport(List<RowImportStore> rowImport)
         {
             // sort by uid
             rowImport.Sort();
 
-            var rowExport = new List<RowExportModel>((int)(DEFAULT_ROWS * 0.6f));
+            var rowExport = new List<RowExportStore>((int)(DEFAULT_ROWS * 0.6f));
 
-            RowExportModel rowE = new RowExportModel { Uid = -1 };
+            RowExportStore rowE = new RowExportStore { Uid = -1 };
             foreach (var rowI in rowImport)
             {
                 if (rowI.Uid == rowE.Uid)
@@ -296,7 +340,7 @@ namespace OsmEveryDay
                 else
                 {
                     if (rowE.Uid != -1) rowExport.Add(rowE);
-                    rowE = new RowExportModel
+                    rowE = new RowExportStore
                     {
                         Uid = rowI.Uid,
                         User = rowI.User,
@@ -311,12 +355,13 @@ namespace OsmEveryDay
             return rowExport;
         }
 
-        static void ExportToCsv(string csv, List<RowExportModel> rowExport)
+        static void ExportToCsv<T>(string csv, ICollection<T> rowExport) where T : IExportToCsv
         {
+            if (rowExport.Count == 0) return;
             try
             {
                 var writeCsv = new StreamWriter(csv, false, Encoding.UTF8);                
-                writeCsv.WriteLine(RowExportModel.ToCsvHeader());
+                writeCsv.WriteLine(rowExport.First().ToCsvHeader());
                 foreach (var rowE in rowExport)
                 {
                     rowE.WriteCsvRow(writeCsv);
@@ -326,24 +371,32 @@ namespace OsmEveryDay
             }
             catch (IOException ioex)
             {
-                Console.WriteLine("IO WRITE EXPORT ERROR: {0}", ioex.Message);
+                Console.WriteLine("IO WRITE EXPORT ({0}) ERROR: {1}", rowExport.First().GetType(), ioex.Message);
             }
         }
 
         static void Analize(string pathToDir)
         {
-            var filesCsv = Directory.GetFiles(pathToDir, "*.csv");
+            var filesCsv = default(string[]);
+            try
+            {
+                filesCsv = Directory.GetFiles(pathToDir, "*.csv");
+            } catch (IOException ioex)
+            {
+                Console.Error.WriteLine("Dir not found: {0}", pathToDir);
+                return;
+            }
             filesCsv = filesCsv.Where(f => !f.Contains("-")).ToArray(); // исключить файлы анализа
             Array.Sort(filesCsv);
 
-            var setPrev = new HashSet<RowAnalizeModel>();
-            var setCur = default(HashSet<RowAnalizeModel>);
+            var setPrev = new HashSet<RowAnalizeStore>();
+            var setCur = default(HashSet<RowAnalizeStore>);
 
             int chainDays = 1;
             foreach (var fileCsv in filesCsv)
             {
                 setPrev = setCur;
-                setCur = new HashSet<RowAnalizeModel>();
+                setCur = new HashSet<RowAnalizeStore>();
 
                 var readerCsv = new StreamReader(Path.Combine(pathToDir, fileCsv), Encoding.UTF8);
                 var header = readerCsv.ReadLine();
@@ -358,7 +411,7 @@ namespace OsmEveryDay
                 {
                     var line = readerCsv.ReadLine();
                     var columns = line.Split(';');
-                    var row = new RowAnalizeModel();
+                    var row = new RowAnalizeStore();
                     if (columns.Length == columnsHeader.Length)
                     {
                         row.Uid = int.Parse(columns[cUid]);
@@ -415,7 +468,8 @@ namespace OsmEveryDay
                     var fileResult = string.Format("{0}-{1}.csv", prev, cur);
                     if (!File.Exists(fileResult))
                     {
-                        ExportAnalizeToCsv(Path.Combine(pathToDir, fileResult), setCur);
+                        //ExportAnalizeToCsv(Path.Combine(pathToDir, fileResult), setCur);
+                        ExportToCsv(Path.Combine(pathToDir, fileResult), setCur);
                         Console.WriteLine("Exporting... -> {0} Records: {1}", fileResult, setCur.Count);
                     }
                     chainDays++;
@@ -423,12 +477,12 @@ namespace OsmEveryDay
             }
         }
 
-        static void ExportAnalizeToCsv(string csv, HashSet<RowAnalizeModel> rowExport)
+        /*static void ExportAnalizeToCsv(string csv, HashSet<RowAnalizeStore> rowExport)
         {
             try
             {
                 var writeCsv = new StreamWriter(csv, false, Encoding.UTF8);
-                writeCsv.WriteLine(RowAnalizeModel.ToCsvHeader());
+                writeCsv.WriteLine(RowAnalizeStore.ToCsvHeader());
                 foreach (var rowE in rowExport)
                 {
                     rowE.WriteCsvRow(writeCsv);
@@ -440,6 +494,365 @@ namespace OsmEveryDay
             {
                 Console.WriteLine("IO WRITE ANALIZE ERROR: {0}", ioex.Message);
             }
+        }*/
+
+        public enum SearchState
+        {
+            No,
+            Found,
+            Complete
+        }
+
+        static void AnalizeYearByChangesetAll(string fileChangesetAll, string year)
+        {
+            var readerOsmBZip2Raw = new FileStream(fileChangesetAll, FileMode.Open);
+
+            string dayStart = string.Empty;
+            string dayEnd = string.Empty;
+            var dayCurrent = default(DateTime);
+
+            try
+            {
+                switch (year.Length)
+                {
+                    case 4: // год
+                        var daySY = new DateTime(int.Parse(year.Substring(0, 4)), 1, 1);
+                        var dayEY = daySY.AddYears(1);
+                        dayStart = daySY.ToShortDateString();
+                        dayEnd = dayEY.ToShortDateString();
+                        dayCurrent = daySY;
+                        break;
+                    case 7: // месяц
+                        var daySM = new DateTime(int.Parse(year.Substring(0, 4)), int.Parse(year.Substring(5, 2)), 1);
+                        var dayEM = daySM.AddMonths(1);
+                        dayStart = daySM.ToShortDateString();
+                        dayEnd = dayEM.ToShortDateString();
+                        dayCurrent = daySM;
+                        break;
+                    case 10: // день
+                        var daySD = new DateTime(int.Parse(year.Substring(0, 4)), int.Parse(year.Substring(5, 2)), int.Parse(year.Substring(8, 2)));
+                        dayStart = dayEnd = daySD.ToShortDateString();
+                        dayCurrent = daySD;
+                        break;
+                    default:
+                        Console.WriteLine("Wrong YEAR: {0}", year);
+                        return;
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine("Error parse YEAR: {0}\n{1}", year, ex.Message);
+                return;
+            }
+
+            if (dayCurrent < new DateTime(2009, 4, 21))
+            {
+                Console.WriteLine("Changesets before 2009-04-21 not supported. Exit.");
+                return;
+            }
+            
+            string backupLine = string.Empty;
+            string curDay = dayCurrent.ToShortDateString();
+            int chainDays = 1;
+
+            var searchState = SearchState.No;
+
+            var indexBZip2 = GetOrCreateIndexBZip2Achives(readerOsmBZip2Raw);
+
+            Console.Write("Progress: {0} - ", curDay);
+
+            var prevDaySet = default(HashSet<RowAnalizeStore>);
+            var curDaySet = new HashSet<RowAnalizeStore>();
+            var yearSet = new HashSet<RowAnalizeStore>();
+            var hashTableByUid = new Hashtable();
+            var prevHashTableByUid = new Hashtable();
+
+            //var bIndex = indexBZip2.BinarySearch(new BZip2OsmIndex { StartDateTime = dayCurrent });
+            //while (indexBZip2[--bIndex].StartDateTime == dayCurrent)
+            //{ }
+            //readerOsmBZip2Raw.Position = indexBZip2[bIndex + 1].Position;
+            var prevBlockIndex = indexBZip2.FindIndex(el => el.StartDateTime == dayCurrent) - 1;
+            readerOsmBZip2Raw.Position = indexBZip2[prevBlockIndex].Position;
+
+            while (readerOsmBZip2Raw.Length > readerOsmBZip2Raw.Position && searchState != SearchState.Complete)
+            {
+                var readerOsmBZip2 = new BZip2InputStream(readerOsmBZip2Raw);
+                readerOsmBZip2.IsStreamOwner = false;
+                var readerOsm = new StreamReader(readerOsmBZip2, Encoding.UTF8);
+
+                while (!readerOsm.EndOfStream && searchState != SearchState.Complete)
+                {
+                    var line = readerOsm.ReadLine();
+                    if (readerOsm.EndOfStream)
+                    {
+                        backupLine = line;
+                        continue;
+                    }
+                    if (backupLine.Length > 0)
+                    {
+                        line = backupLine + line;
+                        backupLine = string.Empty;
+                    }
+
+                    if (line.Contains("<changeset id="))
+                    {
+                        var splits = line.Split('"');
+                        if (splits[2] == " created_at=")
+                        {
+                            var date = splits[3].Substring(0, 10);
+
+                            // раньше времени
+                            if (date.CompareTo(dayStart) < 0) continue;
+                            if (searchState == SearchState.No) searchState = SearchState.Found;
+
+                            if (date != curDay)
+                            {
+                                if (prevDaySet != null)
+                                {
+                                    var forYear = new HashSet<RowAnalizeStore>(curDaySet);
+                                    curDaySet.IntersectWith(prevDaySet);
+
+                                    forYear.ExceptWith(curDaySet);
+                                    yearSet.UnionWith(forYear);
+
+                                    prevDaySet.ExceptWith(curDaySet);
+                                    yearSet.UnionWith(prevDaySet);
+
+
+                                    foreach (var row in curDaySet)
+                                    {
+                                        row.ChainDays = chainDays;
+                                        row.ChangesetsCount += ((RowAnalizeStore)prevHashTableByUid[row.Uid]).ChangesetsCount;
+                                    }
+
+                                    prevDaySet.Clear();
+                                    prevHashTableByUid.Clear();
+
+                                    if (curDaySet.Count == 0)
+                                    {
+                                        searchState = SearchState.Complete;
+                                    }
+
+                                    Console.SetCursorPosition(Console.CursorLeft - 10, Console.CursorTop);
+                                }
+
+                                chainDays++;
+
+                                Console.Write(curDay);
+
+                                if (searchState == SearchState.Found)
+                                {
+                                    prevDaySet = curDaySet;
+                                    prevHashTableByUid = hashTableByUid;
+                                }
+
+                                curDaySet = new HashSet<RowAnalizeStore>();
+                                hashTableByUid = new Hashtable();
+
+                                dayCurrent = dayCurrent.AddDays(1);
+                                curDay = dayCurrent.ToShortDateString();
+                            }
+
+                            if (searchState == SearchState.Found && date == curDay && date.CompareTo(dayEnd) < 0)
+                            {
+                                // в противном случае ананимные правки
+                                if (splits.Length >= 10 && splits[10] == " uid=" && splits[8] == " user=")
+                                {
+                                    var uid = int.Parse(splits[11]);
+
+                                    if (!hashTableByUid.ContainsKey(uid))
+                                    {
+                                        var row = new RowAnalizeStore
+                                        {
+                                            Uid = uid,
+                                            User = splits[9],
+                                            ChangesetsCount = 1
+                                        };
+                                        curDaySet.Add(row);
+                                        hashTableByUid.Add(uid, row);
+                                    }
+                                    else
+                                    {
+                                        var rowO = (RowAnalizeStore)hashTableByUid[uid];
+                                        rowO.ChangesetsCount++;
+                                    }
+                                }
+                            }
+                            else
+                            {
+                                // закончен временной промежуток
+                                yearSet.UnionWith(prevDaySet);
+
+                                prevDaySet.Clear();
+                                prevHashTableByUid.Clear();
+                                curDaySet.Clear();
+
+                                var fullP = Path.GetFullPath(fileChangesetAll);
+                                var dir = Path.GetDirectoryName(fullP);
+                                var fileCsv = string.Format("{0}_{1}.csv", Path.GetFileNameWithoutExtension(fileChangesetAll), year);
+                                string fileResult = Path.Combine(dir, fileCsv);
+                                if (!File.Exists(fileResult))
+                                {
+                                    ExportToCsv(fileResult, yearSet);
+                                    Console.WriteLine();
+                                    Console.WriteLine("Exporting... -> {0} Records: {1}", fileCsv, yearSet.Count);
+                                }
+                                else 
+                                {
+                                    Console.WriteLine("Skip: {0}", fileResult);
+                                }
+                                searchState = SearchState.Complete;
+                            }
+                        }
+                        else
+                        {
+                            //Console.WriteLine();
+                            Console.WriteLine("WARNING: bad line - {0}", line);
+                        }
+                    }
+                }
+                readerOsm.Dispose();
+                readerOsmBZip2.Dispose();
+            }
+
+            readerOsmBZip2Raw.Close();
+        }
+
+        public class BZip2OsmIndex: IExportToCsv, IComparable<BZip2OsmIndex>
+        {
+            public DateTime StartDateTime;
+            public long Position;
+
+            // Default comparer for type.
+            public int CompareTo(BZip2OsmIndex compareRow)
+            {
+                // A null value means that this object is greater.
+                if (compareRow == null)
+                    return 1;
+
+                else
+                {
+                    return this.StartDateTime.CompareTo(compareRow.StartDateTime);                    
+                }
+            }
+
+            public string ToCsvHeader()
+            {
+                return "date_time;position";
+            }
+
+            public void WriteCsvRow(StreamWriter writer)
+            {
+                writer.Write(StartDateTime.ToShortDateString());
+                writer.Write(';');
+                writer.Write(Position);
+                writer.WriteLine();
+            }
+        }
+
+        static List<BZip2OsmIndex> GetOrCreateIndexBZip2Achives(FileStream readerOsmBZip2Raw)
+        {
+            var result = new List<BZip2OsmIndex>(20000);
+
+            var fullP = Path.GetFullPath(readerOsmBZip2Raw.Name);
+            var dir = Path.GetDirectoryName(fullP);
+            var fileCsv = string.Format("{0}_indexBZip2.csv", Path.GetFileNameWithoutExtension(readerOsmBZip2Raw.Name));
+            string fileResult = Path.Combine(dir, fileCsv);
+
+            if (File.Exists(fileResult))
+            {
+                var readerCsv = new StreamReader(fileResult);
+                var headerCsv = readerCsv.ReadLine();
+                while (!readerCsv.EndOfStream)
+                {
+                    var lineCsv = readerCsv.ReadLine();
+                    var splitsCsv = lineCsv.Split(';');
+                    result.Add(new BZip2OsmIndex
+                    {
+                        StartDateTime = DateTime.Parse(splitsCsv[0]),
+                        Position = long.Parse(splitsCsv[1])
+                    });
+                }
+                readerCsv.Close();
+                return result;
+            }
+
+            const int progressSize = 100;
+            long blockSize = readerOsmBZip2Raw.Length / progressSize;
+
+            long nextBlock = blockSize;
+
+            Console.WriteLine("Create index progress:");
+            for (int i = 0; i < progressSize; i++)
+            {
+                Console.Write('░');
+            }
+            Console.Write('\r');
+
+            byte[] bzip2Signature = { (byte)'B', (byte)'Z', (byte)'h' };
+
+            while (readerOsmBZip2Raw.Position < readerOsmBZip2Raw.Length)
+            {
+                bool eof = false;
+                if (readerOsmBZip2Raw.Position > 0)
+                {
+                    int signCheck = 0;
+                    while (signCheck != 3)
+                    {
+                        int b = readerOsmBZip2Raw.ReadByte();
+                        if (b == -1)
+                        {
+                            eof = true;
+                            break;
+                        }
+                        if (b == bzip2Signature[signCheck]) signCheck++;
+                        else signCheck = 0;
+                    }
+
+                    readerOsmBZip2Raw.Seek(-3, SeekOrigin.Current);
+                }
+                if (eof) break;
+
+                var record  = new BZip2OsmIndex
+                {
+                    Position = readerOsmBZip2Raw.Position
+                };
+                var readerOsmBZip2 = new BZip2InputStream(readerOsmBZip2Raw);
+                readerOsmBZip2.IsStreamOwner = false;
+
+                var readerOsm = new StreamReader(readerOsmBZip2, Encoding.UTF8);
+                while (!readerOsm.EndOfStream)
+                {
+                    var line = readerOsm.ReadLine();
+                    if (line.Contains("<changeset id="))
+                    {
+                        var splits = line.Split('"');
+                        if (splits[4] == " closed_at=")
+                        {
+                            record.StartDateTime = DateTime.Parse(splits[5]);
+                            result.Add(record);
+                            break;
+                        }
+                    }
+                }
+
+
+                if (readerOsmBZip2Raw.Position >= nextBlock)
+                {
+                    nextBlock += blockSize;
+                    Console.Write('▓');
+                }
+
+                readerOsm.Dispose();
+                readerOsmBZip2.Dispose();
+            }
+            readerOsmBZip2Raw.Position = 0;
+
+            Console.WriteLine();
+            Console.WriteLine("Complete");
+            ExportToCsv(fileResult, result);
+
+            return result;
         }
     }
 }
